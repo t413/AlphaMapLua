@@ -1,6 +1,7 @@
 -- OSMMap Widget for EdgeTX
 -- Single-file OSM tile map widget with auto-zoom, breadcrumbs, home marker
 -- Place at /WIDGETS/OSMMap/main.lua
+-- Tiles go in /WIDGETS/OSMMap/tiles/Z/X/Y.png
 
 local W_NAME = "OSMMap"
 local TILE_SIZE = 256
@@ -23,9 +24,35 @@ local options = {
 }
 
 -- ── math helpers ────────────────────────────────────────────────────────────
+-- ── colors (initialised in create so lcd.RGB is available) ─────────────────
+local C = {}
+local function initColors()
+  if lcd.RGB then
+    C.bg        = lcd.RGB(20,20,30)
+    C.noTile    = lcd.RGB(30,30,50)
+    C.noTileBdr = lcd.RGB(50,50,80)
+    C.trailR    = lcd.RGB(255,210,0)    -- recent: bright yellow
+    C.trailC    = lcd.RGB(200,100,0)    -- coarse: amber
+    C.home      = lcd.RGB(0,220,80)     -- green
+    C.homeShdw  = lcd.RGB(0,60,20)
+    C.craft     = lcd.RGB(255,80,80)    -- red
+    C.craftShdw = lcd.RGB(80,0,0)
+    C.stale     = lcd.RGB(100,140,255)  -- blue-ish
+    C.barBg     = lcd.RGB(0,0,0)
+    C.armed     = lcd.RGB(255,60,60)
+    C.disarmed  = lcd.RGB(80,200,80)
+    C.white     = WHITE
+  else
+    C.bg=BLACK; C.noTile=BLACK; C.noTileBdr=BLACK
+    C.trailR=YELLOW; C.trailC=ORANGE; C.home=GREEN; C.homeShdw=BLACK
+    C.craft=RED; C.craftShdw=BLACK; C.stale=BLUE; C.barBg=BLACK
+    C.armed=RED; C.disarmed=GREEN; C.white=WHITE
+  end
+end
 
+-- ── math helpers ────────────────────────────────────────────────────────────
+local mfloor = math.floor
 local function clamp(v,lo,hi) return v<lo and lo or v>hi and hi or v end
-local function floor(v) return math.floor(v) end
 
 local function latLonToTileF(lat, lon, zoom)
   local n = 2^zoom
@@ -43,11 +70,9 @@ local function haversine(la1, lo1, la2, lo2)
   return 2*R*math.asin(math.sqrt(a))
 end
 
-local function bearing(la1, lo1, la2, lo2)
-  local dLo = (lo2-lo1)*RAD
-  local y = math.sin(dLo)*math.cos(la2*RAD)
-  local x = math.cos(la1*RAD)*math.sin(la2*RAD) - math.sin(la1*RAD)*math.cos(la2*RAD)*math.cos(dLo)
-  return math.atan2(y, x)  -- radians
+local function fmtDist(m)
+  if m < 1000 then return string.format("%dm", mfloor(m))
+  else              return string.format("%.1fkm", m/1000) end
 end
 
 -- ── tile fetch/cache ─────────────────────────────────────────────────────────
@@ -57,41 +82,37 @@ local tileCache = {}
 local tileCacheOrder = {}
 local CACHE_MAX = 12  -- keep memory sane
 
-local function tileKey(z,x,y) return z.."/"..x.."/"..y end
-
-local function evictTile()
-  if #tileCacheOrder > CACHE_MAX then
-    local oldest = table.remove(tileCacheOrder, 1)
-    tileCache[oldest] = nil
-    collectgarbage()
+local function evictTiles()
+  while #tileCacheOrder > CACHE_MAX do
+    local k = table.remove(tileCacheOrder, 1)
+    tileCache[k] = nil
   end
+  collectgarbage()
 end
 
 local function getTile(z, x, y)
-  -- clamp tile coords
   local n = 2^z
-  if x < 0 or y < 0 or x >= n or y >= n then return nil end
-  local k = tileKey(z,x,y)
-  if tileCache[k] ~= nil then return tileCache[k] end
-
-  -- try local SD card first
-  local localPath = TILE_PATH..z.."/"..x.."/"..y..".png"
-  local bmp = Bitmap.open(localPath)
-  local w,h = Bitmap.getSize(bmp)
+  if x<0 or y<0 or x>=n or y>=n then return nil end
+  local k = z.."/"..x.."/"..y
+  if tileCache[k] ~= nil then return tileCache[k] or nil end
+  local bmp = Bitmap.open(TILE_PATH..k..".png")
+  local w,_ = Bitmap.getSize(bmp)
   if w and w > 0 then
     tileCache[k] = bmp
     table.insert(tileCacheOrder, k)
-    evictTile()
+    evictTiles()
     return bmp
   end
-
-  -- not found locally
   tileCache[k] = false
   return nil
 end
 
--- ── file I/O helpers ─────────────────────────────────────────────────────────
+local function clearTileCache()
+  tileCache = {}; tileCacheOrder = {}
+  collectgarbage(); collectgarbage()
+end
 
+-- ── file I/O helpers ─────────────────────────────────────────────────────────
 local function modelSlug()
   local m = model.getInfo()
   local name = (m and m.name) or "default"
@@ -106,6 +127,7 @@ local function saveLastPos(lat, lon)
     io.write(f, string.format("%.7f,%.7f\n", lat, lon))
     io.close(f)
   end
+  print("[OSMMap] saved last pos "..lat..","..lon)
 end
 
 local function loadLastPos()
@@ -122,51 +144,54 @@ local function loadLastPos()
   return nil, nil
 end
 
--- ── create ───────────────────────────────────────────────────────────────────
+-- ── status bar height (memoised after first lcd call) ───────────────────────
+local BAR_H = nil
+local function getBarH()
+  if BAR_H then return BAR_H end
+  local _, h = lcd.sizeText("Ag", SMLSIZE)
+  BAR_H = (h or 10) + 4
+  return BAR_H
+end
 
+-- ── create ───────────────────────────────────────────────────────────────────
 local function create(zone, opts)
+  initColors()
   local w = {
     zone = zone,
     options = opts,
-    -- state
     lat = nil, lon = nil,          -- live GPS
-    staleLat = nil, staleLon = nil,-- loaded from file
     stalePos = false,              -- true when showing saved pos
     homeLat = nil, homeLon = nil,
     homeSet = false,
     armed = false,
-    prevArmed = false,
-    -- trails
     trailRecent = {},              -- {lat,lon} newest first, max TRAIL_RECENT
     trailCoarse = {},              -- {lat,lon} newest first, max TRAIL_COARSE
     lastCoarseLat = nil, lastCoarseLon = nil,
-    -- zoom
     zoom = opts.MaxZoom or 15,
     autoZoom = true,
-    manualZoomRaw = nil,           -- last raw value of zoom source
+    manualZoomLast = nil,
     zoomSettling = false,
     zoomSettleTime = 0,
     zoomOverlay = false,
     pendingZoom = nil,
+    dbgPushCount = 0,
   }
   -- load saved position
-  w.staleLat, w.staleLon = loadLastPos()
-  if w.staleLat then
-    w.stalePos = true
-    w.lat = w.staleLat
-    w.lon = w.staleLon
+  local sLa, sLo = loadLastPos()
+  if sLa then
+    w.lat = sLa; w.lon = sLo; w.stalePos = true
+    print("[OSMMap] create: stale pos "..sLa..","..sLo)
   end
   return w
 end
 
 -- ── update ───────────────────────────────────────────────────────────────────
-
 local function update(w, opts)
   w.options = opts
+  print("[OSMMap] options updated: MaxZoom="..opts.MaxZoom.." MinZoom="..opts.MinZoom)
 end
 
 -- ── telemetry ────────────────────────────────────────────────────────────────
-
 local function getTelem(name)
   local id = getFieldInfo(name)
   if id then return getValue(id.id) end
@@ -181,14 +206,13 @@ local function readGPS(w)
   -- fallback individual sensors
   local la = getTelem("Lat") or getTelem("lat")
   local lo = getTelem("Lon") or getTelem("lon")
-  if type(la)=="number" and type(lo)=="number" then return la, lo end
+  if type(la)=="number" and type(lo)=="number" and la~=0 and lo~=0 then return la, lo end
   return nil, nil
 end
 
 local function readArmed(w)
   local src = w.options.ArmCh
   if not src or src == 0 then
-    -- fallback: ch5
     local v = getValue("ch5")
     if type(v)=="number" then return v > 0 end
     return false
@@ -201,81 +225,71 @@ end
 -- ── trail management ─────────────────────────────────────────────────────────
 
 local function pushTrail(w, lat, lon)
-  -- recent trail: keep last TRAIL_RECENT
   table.insert(w.trailRecent, 1, {lat, lon})
-  if #w.trailRecent > TRAIL_RECENT then
-    table.remove(w.trailRecent)
-  end
+  while #w.trailRecent > TRAIL_RECENT do table.remove(w.trailRecent) end
 
-  -- coarse trail: only if moved >= TRAIL_MIN_DIST
   local addCoarse = false
   if not w.lastCoarseLat then
     addCoarse = true
   else
-    local d = haversine(w.lastCoarseLat, w.lastCoarseLon, lat, lon)
-    if d >= TRAIL_MIN_DIST then addCoarse = true end
+    addCoarse = haversine(w.lastCoarseLat, w.lastCoarseLon, lat, lon) >= TRAIL_MIN_DIST
   end
   if addCoarse then
     table.insert(w.trailCoarse, 1, {lat, lon})
-    if #w.trailCoarse > TRAIL_COARSE then
-      table.remove(w.trailCoarse)
-    end
-    w.lastCoarseLat = lat
-    w.lastCoarseLon = lon
+    while #w.trailCoarse > TRAIL_COARSE do table.remove(w.trailCoarse) end
+    w.lastCoarseLat = lat; w.lastCoarseLon = lon
+  end
+
+  w.dbgPushCount = w.dbgPushCount + 1
+  if w.dbgPushCount % 10 == 0 then
+    print(string.format("[OSMMap] trail push #%d  recent=%d coarse=%d",
+      w.dbgPushCount, #w.trailRecent, #w.trailCoarse))
   end
 end
 
 -- ── auto zoom ────────────────────────────────────────────────────────────────
-
-local function trailBoundsPixels(w, refTx, refTy, zoom)
-  -- returns min/max pixel offsets of full trail relative to ref tile-fraction
-  local minX, maxX, minY, maxY = 0,0,0,0
-  local function check(lat, lon)
-    local tx, ty = latLonToTileF(lat, lon, zoom)
-    local px = (tx - refTx) * TILE_SIZE
-    local py = (ty - refTy) * TILE_SIZE
-    if px < minX then minX = px end
-    if px > maxX then maxX = px end
-    if py < minY then minY = py end
-    if py > maxY then maxY = py end
-  end
-  for _, p in ipairs(w.trailRecent) do check(p[1], p[2]) end
-  for _, p in ipairs(w.trailCoarse) do check(p[1], p[2]) end
-  return minX, maxX, minY, maxY
-end
+local autoZoomLastTick = 0
+local AUTO_ZOOM_SETTLE = 50  -- ticks between auto-zoom steps (~500ms)
 
 local function doAutoZoom(w)
-  if not w.autoZoom then return end
-  if not w.lat then return end
-  local zw = w.zone.w
-  local zh = w.zone.h
-  local zoom = w.zoom
+  if not w.autoZoom or not w.lat then return end
+  if #w.trailRecent == 0 and #w.trailCoarse == 0 then return end
+  local now = getTime()
+  if now - autoZoomLastTick < AUTO_ZOOM_SETTLE then return end
+
   local minZ = w.options.MinZoom or 8
   local maxZ = w.options.MaxZoom or 17
+  local zw,zh = w.zone.w, w.zone.h
 
-  if #w.trailRecent == 0 and #w.trailCoarse == 0 then return end
+  -- compute pixel span of all trail points relative to craft
+  local cTx,cTy = latLonToTileF(w.lat, w.lon, w.zoom)
+  local mnX,mxX,mnY,mxY = 0,0,0,0
+  local function check(la,lo)
+    local tx,ty = latLonToTileF(la,lo,w.zoom)
+    local px = (tx-cTx)*TILE_SIZE;  local py = (ty-cTy)*TILE_SIZE
+    if px<mnX then mnX=px end; if px>mxX then mxX=px end
+    if py<mnY then mnY=py end; if py>mxY then mxY=py end
+  end
+  for _,p in ipairs(w.trailRecent) do check(p[1],p[2]) end
+  for _,p in ipairs(w.trailCoarse) do check(p[1],p[2]) end
 
-  local tx, ty = latLonToTileF(w.lat, w.lon, zoom)
-  local minX, maxX, minY, maxY = trailBoundsPixels(w, tx, ty, zoom)
+  local spanX = mxX-mnX;  local spanY = mxY-mnY
 
-  -- trail pixel span
-  local spanX = maxX - minX
-  local spanY = maxY - minY
-
-  -- 80% threshold: zoom out if trail doesn't fit within 80% of view
-  local limW = zw * 0.8
-  local limH = zh * 0.8
-  if (spanX > limW or spanY > limH) and zoom > minZ then
-    w.zoom = zoom - 1
-  -- zoom in if trail is tiny (< 20% of view) and room to zoom
-  elseif (spanX < zw * 0.2 and spanY < zh * 0.2) and zoom < maxZ then
-    w.zoom = zoom + 1
+  if (spanX > zw*0.80 or spanY > zh*0.80) and w.zoom > minZ then
+    w.zoom = w.zoom - 1
+    autoZoomLastTick = now
+    clearTileCache()
+    print(string.format("[OSMMap] autozoom OUT -> %d (span %d,%d)", w.zoom, mfloor(spanX), mfloor(spanY)))
+  elseif spanX < zw*0.20 and spanY < zh*0.20 and w.zoom < maxZ then
+    w.zoom = w.zoom + 1
+    autoZoomLastTick = now
+    clearTileCache()
+    print(string.format("[OSMMap] autozoom IN  -> %d (span %d,%d)", w.zoom, mfloor(spanX), mfloor(spanY)))
   end
 end
 
 -- ── manual zoom ──────────────────────────────────────────────────────────────
-
-local ZOOM_SETTLE_MS = 800  -- ms after last change before applying
+local ZOOM_SETTLE_TICKS = 80  -- ~800ms
 
 local function handleManualZoom(w)
   local src = w.options.ZoomSrc
@@ -283,122 +297,82 @@ local function handleManualZoom(w)
   local v = getValue(src)
   if type(v) ~= "number" then return end
 
-  -- map -1024..1024 → minZ..maxZ
   local minZ = w.options.MinZoom or 8
   local maxZ = w.options.MaxZoom or 17
-  local mapped = floor(((v + 1024) / 2048) * (maxZ - minZ + 1) + minZ)
-  mapped = clamp(mapped, minZ, maxZ)
 
-  -- detect "auto" zone: if source near -1024 treat as auto re-enable
-  if v < -900 then
+  -- bottom ~5% of range -> re-engage auto
+  if v < -970 then
     if not w.autoZoom then
-      w.autoZoom = true
-      w.zoomOverlay = false
+      w.autoZoom = true; w.zoomOverlay = true
+      w.zoomSettling = false; w.pendingZoom = nil
+      print("[OSMMap] manual zoom: re-engaged auto")
     end
     return
   end
 
-  if w.manualZoomRaw ~= mapped then
-    w.manualZoomRaw = mapped
-    w.pendingZoom = mapped
-    w.zoomSettling = true
-    w.zoomSettleTime = getTime()  -- EdgeTX getTime() = 10ms ticks
-    w.zoomOverlay = true
-    w.autoZoom = false
+  local mapped = mfloor(((v + 1024) / 2048) * (maxZ - minZ) + minZ + 0.5)
+  mapped = clamp(mapped, minZ, maxZ)
+
+  if w.manualZoomLast ~= mapped then
+    w.manualZoomLast = mapped
+    w.pendingZoom    = mapped
+    w.zoomSettling   = true
+    w.zoomSettleTime = getTime()
+    w.zoomOverlay    = true
+    w.autoZoom       = false
+    print("[OSMMap] manual zoom: pending "..mapped)
   end
 
-  -- after settle period, apply
   if w.zoomSettling and w.pendingZoom then
-    local elapsed = (getTime() - w.zoomSettleTime) * 10  -- to ms
-    if elapsed >= ZOOM_SETTLE_MS then
-      w.zoom = w.pendingZoom
-      w.zoomSettling = false
-      w.zoomOverlay = false
-      w.pendingZoom = nil
-      tileCache = {}  -- clear cache on zoom change
-      tileCacheOrder = {}
-      collectgarbage()
+    if (getTime() - w.zoomSettleTime) >= ZOOM_SETTLE_TICKS then
+      if w.zoom ~= w.pendingZoom then
+        w.zoom = w.pendingZoom
+        clearTileCache()
+        print("[OSMMap] manual zoom: applied "..w.zoom)
+      end
+      w.zoomSettling = false; w.zoomOverlay = false; w.pendingZoom = nil
     end
   end
 end
 
--- ── drawing ──────────────────────────────────────────────────────────────────
+-- ── drawing helpers ──────────────────────────────────────────────────────────
+local function setC(col) lcd.setColor(CUSTOM_COLOR, col) end
 
-local COL_BG       = BLACK
-local COL_TRAIL_R  = lcd.RGB and lcd.RGB(255,200,0)   or YELLOW
-local COL_TRAIL_C  = lcd.RGB and lcd.RGB(255,120,0)   or ORANGE
-local COL_HOME     = lcd.RGB and lcd.RGB(0,220,80)    or GREEN
-local COL_CRAFT    = lcd.RGB and lcd.RGB(255,80,80)   or RED
-local COL_STALE    = lcd.RGB and lcd.RGB(120,120,255) or BLUE
-local COL_OVERLAY  = lcd.RGB and lcd.RGB(0,0,0)       or BLACK
-local COL_TEXT     = WHITE
-local COL_NOTILE   = lcd.RGB and lcd.RGB(30,30,50)    or BLACK
-
--- safe colour setter: CUSTOM_COLOR path for EdgeTX
-local function setCol(c)
-  if lcd.RGB then
-    lcd.setColor(CUSTOM_COLOR, c)
-    return CUSTOM_COLOR
-  end
-  return c
-end
-
+-- ── draw tiles ───────────────────────────────────────────────────────────────
+-- Returns tOX, tOY (pixel top-left of tile [cTx,cTy]), cTx, cTy
 local function drawTiles(w, cx, cy)
-  -- cx,cy = pixel center of the widget (screen coords)
-  -- craft is at center
   local zoom = w.zoom
-  local lat  = w.lat
-  local lon  = w.lon
+  local tx,ty = latLonToTileF(w.lat, w.lon, zoom)
+  local cTx = mfloor(tx);  local cTy = mfloor(ty)
+  local tOX = cx - mfloor((tx-cTx) * TILE_SIZE)
+  local tOY = cy - mfloor((ty-cTy) * TILE_SIZE)
+  local ox,oy,zw,zh = w.zone.x, w.zone.y, w.zone.w, w.zone.h
+  local tilesH = math.ceil(zw/TILE_SIZE/2)+1
+  local tilesV = math.ceil(zh/TILE_SIZE/2)+1
 
-  local tx, ty = latLonToTileF(lat, lon, zoom)
-  -- fractional offset within center tile
-  local fracX = tx - floor(tx)
-  local fracY = ty - floor(ty)
-  local cTx = floor(tx)
-  local cTy = floor(ty)
-
-  local zw = w.zone.w
-  local zh = w.zone.h
-  local ox = w.zone.x
-  local oy = w.zone.y
-
-  -- how many tiles we need each side
-  local tilesH = math.ceil(zw / TILE_SIZE / 2) + 1
-  local tilesV = math.ceil(zh / TILE_SIZE / 2) + 1
-
-  -- pixel origin of tile cTx,cTy on screen
-  local tOriginX = cx - floor(fracX * TILE_SIZE)
-  local tOriginY = cy - floor(fracY * TILE_SIZE)
-
-  for dy = -tilesV, tilesV do
-    for dx = -tilesH, tilesH do
-      local px = tOriginX + dx * TILE_SIZE
-      local py = tOriginY + dy * TILE_SIZE
-      -- skip if fully outside zone
+  for dy=-tilesV,tilesV do
+    for dx=-tilesH,tilesH do
+      local px = tOX + dx*TILE_SIZE
+      local py = tOY + dy*TILE_SIZE
       if px < ox+zw and px+TILE_SIZE > ox and py < oy+zh and py+TILE_SIZE > oy then
         local bmp = getTile(zoom, cTx+dx, cTy+dy)
         if bmp then
           lcd.drawBitmap(bmp, px, py)
         else
-          -- placeholder: dark rect with grid
-          lcd.setColor(CUSTOM_COLOR, COL_NOTILE)
-          lcd.drawFilledRectangle(px, py, TILE_SIZE, TILE_SIZE, CUSTOM_COLOR)
-          lcd.setColor(CUSTOM_COLOR, lcd.RGB and lcd.RGB(50,50,70) or BLACK)
-          lcd.drawRectangle(px, py, TILE_SIZE, TILE_SIZE, CUSTOM_COLOR)
+          setC(C.noTile);    lcd.drawFilledRectangle(px,py,TILE_SIZE,TILE_SIZE,CUSTOM_COLOR)
+          setC(C.noTileBdr); lcd.drawRectangle(px,py,TILE_SIZE,TILE_SIZE,CUSTOM_COLOR)
         end
       end
     end
   end
-
-  -- return tile origin for use by overlay functions
-  return tOriginX, tOriginY, cTx, cTy, fracX, fracY
+  return tOX, tOY, cTx, cTy
 end
 
-local function latLonToScreen(lat, lon, tOriginX, tOriginY, tCx, tCy, zoom)
-  local tx, ty = latLonToTileF(lat, lon, zoom)
-  local px = tOriginX + (tx - tCx) * TILE_SIZE
-  local py = tOriginY + (ty - tCy) * TILE_SIZE
-  return floor(px), floor(py)
+-- ── coordinate helpers ───────────────────────────────────────────────────────
+local function toScreen(lat, lon, tOX, tOY, cTx, cTy, zoom)
+  local tx,ty = latLonToTileF(lat, lon, zoom)
+  return mfloor(tOX + (tx-cTx)*TILE_SIZE),
+         mfloor(tOY + (ty-cTy)*TILE_SIZE)
 end
 
 local function inZone(w, px, py)
@@ -406,134 +380,157 @@ local function inZone(w, px, py)
      and py >= w.zone.y and py < w.zone.y+w.zone.h
 end
 
-local function drawTrail(w, tOX, tOY, tCx, tCy)
+local function drawTrail(w, tOX, tOY, cTx, cTy)
   local zoom = w.zoom
   local ox, oy, zw, zh = w.zone.x, w.zone.y, w.zone.w, w.zone.h
 
-  -- coarse trail first (older, dimmer)
-  lcd.setColor(CUSTOM_COLOR, COL_TRAIL_C)
-  for i = 2, #w.trailCoarse do
-    local p1 = w.trailCoarse[i-1]
-    local p2 = w.trailCoarse[i]
-    local x1,y1 = latLonToScreen(p1[1],p1[2], tOX,tOY,tCx,tCy,zoom)
-    local x2,y2 = latLonToScreen(p2[1],p2[2], tOX,tOY,tCx,tCy,zoom)
+  local function drawSeg(p1, p2, col)
+    local x1,y1 = toScreen(p1[1],p1[2], tOX,tOY,cTx,cTy,zoom)
+    local x2,y2 = toScreen(p2[1],p2[2], tOX,tOY,cTx,cTy,zoom)
+    setC(col)
     if lcd.drawLineWithClipping then
-      lcd.drawLineWithClipping(x1,y1,x2,y2, ox,ox+zw, oy,oy+zh, SOLID, CUSTOM_COLOR)
+      lcd.drawLineWithClipping(x1,y1,x2,y2, ox,ox+zw-1, oy,oy+zh-1, SOLID, CUSTOM_COLOR)
     else
       lcd.drawLine(x1,y1,x2,y2, SOLID, CUSTOM_COLOR)
     end
   end
 
-  -- recent trail (bright)
-  lcd.setColor(CUSTOM_COLOR, COL_TRAIL_R)
-  for i = 2, #w.trailRecent do
-    local p1 = w.trailRecent[i-1]
-    local p2 = w.trailRecent[i]
-    local x1,y1 = latLonToScreen(p1[1],p1[2], tOX,tOY,tCx,tCy,zoom)
-    local x2,y2 = latLonToScreen(p2[1],p2[2], tOX,tOY,tCx,tCy,zoom)
-    if lcd.drawLineWithClipping then
-      lcd.drawLineWithClipping(x1,y1,x2,y2, ox,ox+zw, oy,oy+zh, SOLID, CUSTOM_COLOR)
-    else
-      lcd.drawLine(x1,y1,x2,y2, SOLID, CUSTOM_COLOR)
-    end
+  -- coarse trail first (drawn under recent)
+  for i=2,#w.trailCoarse do drawSeg(w.trailCoarse[i-1], w.trailCoarse[i], C.trailC) end
+  -- recent trail on top
+  for i=2,#w.trailRecent do drawSeg(w.trailRecent[i-1], w.trailRecent[i], C.trailR) end
+  -- small dot at each recent point for visibility
+  setC(C.trailR)
+  for _,p in ipairs(w.trailRecent) do
+    local px,py = toScreen(p[1],p[2], tOX,tOY,cTx,cTy,zoom)
+    lcd.drawFilledRectangle(px-2, py-2, 4, 4, CUSTOM_COLOR)
   end
 end
 
 -- draw H marker (home) or edge chevron
-local function drawHomeMarker(w, tOX, tOY, tCx, tCy)
+local function drawHomeMarker(w, tOX, tOY, cTx, cTy)
   if not w.homeSet then return end
   local zoom = w.zoom
   local ox, oy, zw, zh = w.zone.x, w.zone.y, w.zone.w, w.zone.h
-  local hx, hy = latLonToScreen(w.homeLat, w.homeLon, tOX, tOY, tCx, tCy, zoom)
-  local cx, cy = w.lat, w.lon
-  local margin = 10
+  local hx, hy = toScreen(w.homeLat, w.homeLon, tOX, tOY, cTx, cTy, zoom)
+  local margin = 14
 
   if inZone(w, hx, hy) then
-    -- draw H icon
-    lcd.setColor(CUSTOM_COLOR, COL_HOME)
-    local s = 7
+    -- H glyph with contrast shadow
+    local s = 6
+    -- draw shadow (offset neighbours)
+    setC(C.homeShdw)
+    for _,d in ipairs({{-1,-1},{1,-1},{-1,1},{1,1},{0,-1},{0,1},{-1,0},{1,0}}) do
+      local dx,dy2 = d[1],d[2]
+      lcd.drawLine(hx-s+dx,hy-s+dy2, hx-s+dx,hy+s+dy2, SOLID, CUSTOM_COLOR)
+      lcd.drawLine(hx+s+dx,hy-s+dy2, hx+s+dx,hy+s+dy2, SOLID, CUSTOM_COLOR)
+      lcd.drawLine(hx-s+dx,hy+dy2,   hx+s+dx,hy+dy2,   SOLID, CUSTOM_COLOR)
+    end
+    -- H colour strokes
+    setC(C.home)
     lcd.drawLine(hx-s, hy-s, hx-s, hy+s, SOLID, CUSTOM_COLOR)
     lcd.drawLine(hx+s, hy-s, hx+s, hy+s, SOLID, CUSTOM_COLOR)
     lcd.drawLine(hx-s, hy,   hx+s, hy,   SOLID, CUSTOM_COLOR)
-    lcd.setColor(CUSTOM_COLOR, COL_HOME)
-    lcd.drawText(hx+s+2, hy-4, "H", SMLSIZE+CUSTOM_COLOR)
+
   else
     -- clamp to edge and draw chevron arrow
     local ex = clamp(hx, ox+margin, ox+zw-margin)
     local ey = clamp(hy, oy+margin, oy+zh-margin)
-    -- bearing from screen center to home
-    local ang = math.atan2(hy - (oy+zh/2), hx - (ox+zw/2))
-    lcd.setColor(CUSTOM_COLOR, COL_HOME)
-    local ar = 7
-    -- arrowhead
-    local ax = ex + ar * math.cos(ang)
-    local ay = ey + ar * math.sin(ang)
-    local bx = ex + ar * math.cos(ang + 2.4)
-    local by = ey + ar * math.sin(ang + 2.4)
-    local dx = ex + ar * math.cos(ang - 2.4)
-    local dy = ey + ar * math.sin(ang - 2.4)
-    lcd.drawLine(floor(ax), floor(ay), floor(bx), floor(by), SOLID, CUSTOM_COLOR)
-    lcd.drawLine(floor(ax), floor(ay), floor(dx), floor(dy), SOLID, CUSTOM_COLOR)
-    lcd.drawLine(floor(bx), floor(by), floor(ex), floor(ey), SOLID, CUSTOM_COLOR)
-    lcd.drawLine(floor(dx), floor(dy), floor(ex), floor(ey), SOLID, CUSTOM_COLOR)
-    lcd.drawText(ex-4, ey+ar+1, "H", SMLSIZE+CUSTOM_COLOR)
+    local ang = math.atan2(hy-(oy+zh/2), hx-(ox+zw/2))
+    local ar = 10
+    local tip  = {ex + ar*math.cos(ang),         ey + ar*math.sin(ang)}
+    local lw   = {ex + ar*math.cos(ang+2.5),      ey + ar*math.sin(ang+2.5)}
+    local rw   = {ex + ar*math.cos(ang-2.5),      ey + ar*math.sin(ang-2.5)}
+    local tail = {ex + ar*0.35*math.cos(ang+PI),  ey + ar*0.35*math.sin(ang+PI)}
+    local pts  = {tip, lw, tail, rw, tip}
+
+    -- fat shadow (draw 3 offsets)
+    setC(C.homeShdw)
+    for _,off in ipairs({{-1,-1},{1,-1},{0,1}}) do
+      for i=1,#pts-1 do
+        lcd.drawLine(mfloor(pts[i][1])+off[1], mfloor(pts[i][2])+off[2],
+                     mfloor(pts[i+1][1])+off[1], mfloor(pts[i+1][2])+off[2], SOLID, CUSTOM_COLOR)
+      end
+    end
+    -- colour arrow
+    setC(C.home)
+    for i=1,#pts-1 do
+      lcd.drawLine(mfloor(pts[i][1]), mfloor(pts[i][2]),
+                   mfloor(pts[i+1][1]), mfloor(pts[i+1][2]), SOLID, CUSTOM_COLOR)
+    end
   end
 end
 
 -- draw craft dot at center
 local function drawCraft(w, cx, cy)
-  local col = w.stalePos and COL_STALE or COL_CRAFT
-  lcd.setColor(CUSTOM_COLOR, col)
-  lcd.drawFilledRectangle(cx-4, cy-4, 9, 9, CUSTOM_COLOR)
-  lcd.setColor(CUSTOM_COLOR, WHITE)
-  lcd.drawRectangle(cx-5, cy-5, 11, 11, CUSTOM_COLOR)
+  local col  = w.stalePos and C.stale  or C.craft
+  local shdw = w.stalePos and C.barBg  or C.craftShdw
+  -- shadow ring
+  setC(shdw)
+  lcd.drawCircle(cx, cy, 8, CUSTOM_COLOR)
+  -- filled craft circle
+  setC(col)
+  lcd.drawFilledCircle(cx, cy, 5, CUSTOM_COLOR)
+  -- white outline
+  setC(C.white)
+  lcd.drawCircle(cx, cy, 5, CUSTOM_COLOR)
 end
 
+-- ── status bar ───────────────────────────────────────────────────────────────
+local function drawStatusBar(w)
+  local bh = getBarH()
+  local ox,oy,zw = w.zone.x, w.zone.y, w.zone.w
+  setC(C.barBg)
+  lcd.drawFilledRectangle(ox, oy, zw, bh, CUSTOM_COLOR)
+
+  local f  = SMLSIZE + CUSTOM_COLOR
+  local yT = oy + 2
+
+  -- left: zoom level + auto/manual indicator + stale flag
+  local leftStr = string.format("Z:%d%s", w.zoom, w.autoZoom and " A" or " M")
+  if w.stalePos then leftStr = leftStr.." STALE" end
+  setC(w.stalePos and C.stale or C.white)
+  lcd.drawText(ox+2, yT, leftStr, f)
+
+  -- center: ARMED / disarmed
+  setC(w.armed and C.armed or C.disarmed)
+  lcd.drawText(ox + zw/2, yT, w.armed and "ARMED" or "disarmed", f + CENTER)
+
+  -- right: home distance
+  if w.homeSet and w.lat then
+    local dist = haversine(w.lat, w.lon, w.homeLat, w.homeLon)
+    local distStr = "H "..fmtDist(dist)
+    local sw,_  = lcd.sizeText(distStr, SMLSIZE)
+    setC(C.home)
+    lcd.drawText(ox+zw-sw-2, yT, distStr, f)
+  end
+end
+
+-- ── zoom overlay ─────────────────────────────────────────────────────────────
 local function drawZoomOverlay(w)
   if not w.zoomOverlay then return end
-  local ox, oy = w.zone.x, w.zone.y
-  local zw, zh = w.zone.w, w.zone.h
-  local pz = w.pendingZoom or w.zoom
-  local label = w.autoZoom and "AUTO" or ("Z:"..pz)
-  -- semi-transparent box
-  lcd.setColor(CUSTOM_COLOR, lcd.RGB and lcd.RGB(0,0,0) or BLACK)
-  lcd.drawFilledRectangle(ox+zw/2-30, oy+zh/2-14, 60, 28, CUSTOM_COLOR)
-  lcd.setColor(CUSTOM_COLOR, WHITE)
-  lcd.drawRectangle(ox+zw/2-30, oy+zh/2-14, 60, 28, CUSTOM_COLOR)
-  lcd.drawText(ox+zw/2, oy+zh/2-6, label, MIDSIZE+CENTER+CUSTOM_COLOR)
+  local ox,oy,zw,zh = w.zone.x, w.zone.y, w.zone.w, w.zone.h
+  local label = w.autoZoom and "AUTO"
+            or (w.pendingZoom and ("Zoom: "..w.pendingZoom) or ("Zoom: "..w.zoom))
+  local sw,sh = lcd.sizeText(label, MIDSIZE)
+  local bw = sw+20;  local bh = sh+12
+  local bx = ox + mfloor((zw-bw)/2)
+  local by = oy + mfloor((zh-bh)/2)
+  setC(C.barBg)
+  lcd.drawFilledRectangle(bx, by, bw, bh, CUSTOM_COLOR)
+  setC(C.white)
+  lcd.drawRectangle(bx, by, bw, bh, CUSTOM_COLOR)
+  lcd.drawText(ox+zw/2, by+6, label, MIDSIZE+CENTER+CUSTOM_COLOR)
 end
 
-local function drawStatusBar(w)
-  -- tiny status line at top of zone
-  local ox, oy = w.zone.x, w.zone.y
-  local zw = w.zone.w
-  local flags = SMLSIZE + CUSTOM_COLOR
-  lcd.setColor(CUSTOM_COLOR, lcd.RGB and lcd.RGB(0,0,0) or BLACK)
-  lcd.drawFilledRectangle(ox, oy, zw, 12, CUSTOM_COLOR)
-  lcd.setColor(CUSTOM_COLOR, w.stalePos and COL_STALE or WHITE)
-  local gpsStr = w.lat and string.format("Z:%d", w.zoom) or "No GPS"
-  if w.stalePos then gpsStr = gpsStr.." [STALE]" end
-  lcd.drawText(ox+2, oy+1, gpsStr, flags)
-  if w.homeSet then
-    lcd.setColor(CUSTOM_COLOR, COL_HOME)
-    lcd.drawText(ox+zw-20, oy+1, "H", flags)
-  end
-  if w.armed then
-    lcd.setColor(CUSTOM_COLOR, COL_CRAFT)
-    lcd.drawText(ox+zw/2-8, oy+1, "ARMED", flags)
-  end
-end
-
+-- ── no-GPS screen ────────────────────────────────────────────────────────────
 local function drawNoGPS(w)
-  local ox, oy = w.zone.x, w.zone.y
-  local zw, zh = w.zone.w, w.zone.h
-  lcd.setColor(CUSTOM_COLOR, COL_BG)
-  lcd.drawFilledRectangle(ox, oy, zw, zh, CUSTOM_COLOR)
-  lcd.setColor(CUSTOM_COLOR, WHITE)
-  lcd.drawText(ox+zw/2, oy+zh/2-8, "Waiting for GPS", MIDSIZE+CENTER+CUSTOM_COLOR)
-  if w.zoom then
-    lcd.drawText(ox+zw/2, oy+zh/2+10, "Z:"..w.zoom, SMLSIZE+CENTER+CUSTOM_COLOR)
-  end
+  local ox,oy,zw,zh = w.zone.x, w.zone.y, w.zone.w, w.zone.h
+  setC(C.bg)
+  lcd.drawFilledRectangle(ox,oy,zw,zh,CUSTOM_COLOR)
+  setC(C.white)
+  lcd.drawText(ox+zw/2, oy+zh/2-10, "Waiting for GPS", MIDSIZE+CENTER+CUSTOM_COLOR)
+  lcd.drawText(ox+zw/2, oy+zh/2+8,  "Z:"..w.zoom, SMLSIZE+CENTER+CUSTOM_COLOR)
 end
 
 -- ── background ───────────────────────────────────────────────────────────────
@@ -550,19 +547,22 @@ local function background(w)
       w.homeLat = la
       w.homeLon = lo
       w.homeSet = true
+      print(string.format("[OSMMap] ARMED -> home %.6f,%.6f", la, lo))
+    else
+      print("[OSMMap] ARMED but no GPS lock for home")
     end
   end
+  -- disarm falling edge -> persist last position
   if (not armed) and w.armed then
-    -- just disarmed: save last position
     if la and lo then saveLastPos(la, lo) end
+    print("[OSMMap] DISARMED")
   end
   w.armed = armed
 
   if la and lo then
     w.stalePos = false
-    if w.lat ~= la or w.lon ~= lo then
-      pushTrail(w, la, lo)
-    end
+    -- push trail on every tick (coarse trail self-deduplicates)
+    pushTrail(w, la, lo)
     w.lat = la
     w.lon = lo
   else
@@ -570,6 +570,7 @@ local function background(w)
     if w.lat and not w.stalePos then
       saveLastPos(w.lat, w.lon)
       w.stalePos = true
+      print("[OSMMap] telem lost -> stale, saved last pos")
     end
   end
 end
@@ -594,20 +595,19 @@ local function refresh(w, event, touchState)
   end
 
   local ox, oy = w.zone.x, w.zone.y
-  local zw, zh = w.zone.w, w.zone.h
-  local cx = ox + floor(zw/2)
-  local cy = oy + floor(zh/2)
+  local zw, h = w.zone.w, w.zone.h
+  local cx = ox + mfloor(zw/2)
+  local cy = oy + mfloor(zh/2)
 
-  -- clip zone background
-  lcd.setColor(CUSTOM_COLOR, COL_BG)
+  setC(C.bg)
   lcd.drawFilledRectangle(ox, oy, zw, zh, CUSTOM_COLOR)
 
   -- tiles
-  local tOX, tOY, tCx, tCy = drawTiles(w, cx, cy)
+  local tOX,tOY,cTx,cTy = drawTiles(w, cx, cy)
 
   -- overlays
-  drawTrail(w, tOX, tOY, tCx, tCy)
-  drawHomeMarker(w, tOX, tOY, tCx, tCy)
+  drawTrail(w, tOX, tOY, cTx, cTy)
+  drawHomeMarker(w, tOX, tOY, cTx, cTy)
   drawCraft(w, cx, cy)
   drawStatusBar(w)
   drawZoomOverlay(w)
