@@ -1,0 +1,4 @@
+.DS_Store
+*.luac
+tiles/
+last_*.txt
