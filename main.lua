@@ -1,7 +1,8 @@
--- AlphaMap Widget for EdgeTX
+-- AlphaMap Widget for EdgeTX by t413, https://github.com/t413
 -- Single-file OSM tile map widget breadcrumbs, home marker
--- Place at /WIDGETS/AlphaMap/main.lua
--- Tiles go in /WIDGETS/AlphaMap/tiles/Z/X/Y.png
+-- Install at /WIDGETS/AlphaMapLua/main.lua
+-- Tiles go in /WIDGETS/AlphaMapLua/tiles/Z/X/Y.png, see readme.md for more info
+-- Licensed under GPLv3
 
 local W_NAME = "AlphaMap"
 local TILE_SIZE = 256

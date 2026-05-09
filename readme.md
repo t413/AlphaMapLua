@@ -70,3 +70,6 @@ On your radio:
 - [yaapu Horus Mapping Widget](https://github.com/yaapu/HorusMappingWidget)
 - [b14ckyy's ETHOSMappingWidget-Revisited](https://github.com/b14ckyy/ETHOSMappingWidget-Revisited) is specifically for ETHOS radios
 
+# License
+
+This project is licensed under the GPL-3.0 License. See details in the [LICENSE](https://github.com/t413/AlphaMapLua/blob/master/LICENSE) file.
