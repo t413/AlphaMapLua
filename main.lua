@@ -11,9 +11,11 @@ local TILE_PATH = "/WIDGETS/OSMMap/tiles/"
 local SAVE_PATH = "/WIDGETS/OSMMap/last_"
 local PI = math.pi
 local RAD = PI / 180
-local TRAIL_RECENT = 10      -- always-kept last N points
-local TRAIL_COARSE = 100     -- coarse trail max points
-local TRAIL_MIN_DIST = 10    -- meters min movement for coarse trail
+local TRAIL_MAX = 100
+local TRAIL_MIN_STEP = 1
+local TRAIL_BAND_THRESHOLDS = {10, 20, 50, TRAIL_MAX} --point index
+local TRAIL_BAND_TOLERANCES = { 1, 10, 20, 50} --meters tollerance
+local ZOOM_OVERLAY_TICKS = 40
 
 -- widget options exposed to EdgeTX settings menu
 local options = {
@@ -32,7 +34,6 @@ local function initColors()
     C.noTile    = lcd.RGB(30,30,50)
     C.noTileBdr = lcd.RGB(50,50,80)
     C.trailR    = lcd.RGB(255,210,0)    -- recent: bright yellow
-    C.trailC    = lcd.RGB(200,100,0)    -- coarse: amber
     C.home      = lcd.RGB(0,220,80)     -- green
     C.homeShdw  = lcd.RGB(0,60,20)
     C.craft     = lcd.RGB(255,80,80)    -- red
@@ -44,7 +45,7 @@ local function initColors()
     C.white     = WHITE
   else
     C.bg=BLACK; C.noTile=BLACK; C.noTileBdr=BLACK
-    C.trailR=YELLOW; C.trailC=ORANGE; C.home=GREEN; C.homeShdw=BLACK
+    C.trailR=YELLOW; C.home=GREEN; C.homeShdw=BLACK
     C.craft=RED; C.craftShdw=BLACK; C.stale=BLUE; C.barBg=BLACK
     C.armed=RED; C.disarmed=GREEN; C.white=WHITE
   end
@@ -164,17 +165,17 @@ local function create(zone, opts)
     homeLat = nil, homeLon = nil,
     homeSet = false,
     armed = false,
-    trailRecent = {},              -- {lat,lon} newest first, max TRAIL_RECENT
-    trailCoarse = {},              -- {lat,lon} newest first, max TRAIL_COARSE
-    lastCoarseLat = nil, lastCoarseLon = nil,
+    trail = {},                    -- {lat,lon} newest first, progressive decimation
     zoom = opts.MaxZoom or 15,
     autoZoom = true,
+    autoZoomDirty = true,
     manualZoomLast = nil,
     zoomSettling = false,
     zoomSettleTime = 0,
     zoomOverlay = false,
+    zoomOverlayTime = 0,
     pendingZoom = nil,
-    dbgPushCount = 0,
+    lastDecimate = 0,
   }
   -- load saved position
   local sLa, sLo = loadLastPos()
@@ -200,14 +201,19 @@ end
 
 local function readGPS(w)
   local gps = getTelem("GPS") or getTelem("Gps")
+  local lat, lon, sats
   if type(gps) == "table" and gps.lat and gps.lon then
-    return gps.lat, gps.lon
+    lat = gps.lat
+    lon = gps.lon
+    sats = gps.sat or gps.sats or gps.numSat or gps.numSats
+  else
+    lat = getTelem("Lat") or getTelem("lat")
+    lon = getTelem("Lon") or getTelem("lon")
   end
-  -- fallback individual sensors
-  local la = getTelem("Lat") or getTelem("lat")
-  local lo = getTelem("Lon") or getTelem("lon")
-  if type(la)=="number" and type(lo)=="number" and la~=0 and lo~=0 then return la, lo end
-  return nil, nil
+  if type(lat)=="number" and type(lon)=="number" and lat~=0 and lon~=0 then
+    return lat, lon, type(sats)=="number" and sats or nil
+  end
+  return nil, nil, nil
 end
 
 local function readArmed(w)
@@ -224,67 +230,102 @@ end
 
 -- ── trail management ─────────────────────────────────────────────────────────
 
+local TRAIL_MAX_DECIMATE = 200 --ticks between decimations
+
+local function trailTolerance(index)
+  if index <= TRAIL_BAND_THRESHOLDS[1] then return TRAIL_BAND_TOLERANCES[1] end
+  if index <= TRAIL_BAND_THRESHOLDS[2] then return TRAIL_BAND_TOLERANCES[2] end
+  if index <= TRAIL_BAND_THRESHOLDS[3] then return TRAIL_BAND_TOLERANCES[3] end
+  return TRAIL_BAND_TOLERANCES[4]
+end
+
+local function decimateTrail(w)
+  local old = w.trail
+  local kept = {}
+  local last = nil
+  for i = 1, #old do
+    local pt = old[i]
+    if not last then
+      table.insert(kept, pt)
+      last = pt
+    else
+      local idx = #kept + 1
+      local tol = trailTolerance(idx)
+      if haversine(pt[1], pt[2], last[1], last[2]) >= tol then
+        table.insert(kept, pt)
+        last = pt
+      end
+    end
+    if #kept >= TRAIL_MAX then break end
+  end
+  w.trail = kept
+  print(string.format("[OSMMap] trail decimate from %d to %d", #old, #kept))
+end
+
 local function pushTrail(w, lat, lon)
-  table.insert(w.trailRecent, 1, {lat, lon})
-  while #w.trailRecent > TRAIL_RECENT do table.remove(w.trailRecent) end
-
-  local addCoarse = false
-  if not w.lastCoarseLat then
-    addCoarse = true
-  else
-    addCoarse = haversine(w.lastCoarseLat, w.lastCoarseLon, lat, lon) >= TRAIL_MIN_DIST
-  end
-  if addCoarse then
-    table.insert(w.trailCoarse, 1, {lat, lon})
-    while #w.trailCoarse > TRAIL_COARSE do table.remove(w.trailCoarse) end
-    w.lastCoarseLat = lat; w.lastCoarseLon = lon
+  local last = w.trail[1]
+  if last then
+    local delta = haversine(lat, lon, last[1], last[2])
+    if delta < TRAIL_MIN_STEP then
+      return
+    end
   end
 
-  w.dbgPushCount = w.dbgPushCount + 1
-  if w.dbgPushCount % 10 == 0 then
-    print(string.format("[OSMMap] trail push #%d  recent=%d coarse=%d",
-      w.dbgPushCount, #w.trailRecent, #w.trailCoarse))
+  table.insert(w.trail, 1, {lat, lon})
+  w.autoZoomDirty = true --requests new calculation
+  local now = getTime()
+  if now - w.lastDecimate >= TRAIL_MAX_DECIMATE then
+    w.lastDecimate = now
+    decimateTrail(w)
   end
 end
 
 -- ── auto zoom ────────────────────────────────────────────────────────────────
 local autoZoomLastTick = 0
-local AUTO_ZOOM_SETTLE = 50  -- ticks between auto-zoom steps (~500ms)
+local AUTO_ZOOM_SETTLE = 500  -- ticks between auto-zooms
+
+local function canZoomIn(w, zoom)
+  if not w.lat then return false end
+  local tx,ty = latLonToTileF(w.lat, w.lon, zoom)
+  local cTx,cTy = mfloor(tx), mfloor(ty)
+  return getTile(zoom, cTx, cTy) ~= nil
+end
 
 local function doAutoZoom(w)
-  if not w.autoZoom or not w.lat then return end
-  if #w.trailRecent == 0 and #w.trailCoarse == 0 then return end
+  if not w.autoZoom or not w.lat or not w.autoZoomDirty then return end
+  if #w.trail == 0 then return end
   local now = getTime()
   if now - autoZoomLastTick < AUTO_ZOOM_SETTLE then return end
+  autoZoomLastTick = now
 
   local minZ = w.options.MinZoom or 8
   local maxZ = w.options.MaxZoom or 17
   local zw,zh = w.zone.w, w.zone.h
 
-  -- compute pixel span of all trail points relative to craft
   local cTx,cTy = latLonToTileF(w.lat, w.lon, w.zoom)
   local mnX,mxX,mnY,mxY = 0,0,0,0
   local function check(la,lo)
     local tx,ty = latLonToTileF(la,lo,w.zoom)
     local px = (tx-cTx)*TILE_SIZE;  local py = (ty-cTy)*TILE_SIZE
-    if px<mnX then mnX=px end; if px>mxX then mxX=px end
-    if py<mnY then mnY=py end; if py>mxY then mxY=py end
+    if px < mnX then mnX = px end; if px > mxX then mxX = px end
+    if py < mnY then mnY = py end; if py > mxY then mxY = py end
   end
-  for _,p in ipairs(w.trailRecent) do check(p[1],p[2]) end
-  for _,p in ipairs(w.trailCoarse) do check(p[1],p[2]) end
+  for _,p in ipairs(w.trail) do check(p[1],p[2]) end
 
   local spanX = mxX-mnX;  local spanY = mxY-mnY
 
   if (spanX > zw*0.80 or spanY > zh*0.80) and w.zoom > minZ then
     w.zoom = w.zoom - 1
-    autoZoomLastTick = now
     clearTileCache()
     print(string.format("[OSMMap] autozoom OUT -> %d (span %d,%d)", w.zoom, mfloor(spanX), mfloor(spanY)))
   elseif spanX < zw*0.20 and spanY < zh*0.20 and w.zoom < maxZ then
-    w.zoom = w.zoom + 1
-    autoZoomLastTick = now
-    clearTileCache()
-    print(string.format("[OSMMap] autozoom IN  -> %d (span %d,%d)", w.zoom, mfloor(spanX), mfloor(spanY)))
+    if canZoomIn(w, w.zoom + 1) then
+      w.zoom = w.zoom + 1
+      clearTileCache()
+      print(string.format("[OSMMap] autozoom IN  -> %d (span %d,%d)", w.zoom, mfloor(spanX), mfloor(spanY)))
+    else
+      print(string.format("[OSMMap] autozoom blocked at %d because zoom %d has no tiles", w.zoom, w.zoom + 1))
+    end
   end
 end
 
@@ -303,7 +344,7 @@ local function handleManualZoom(w)
   -- bottom ~5% of range -> re-engage auto
   if v < -970 then
     if not w.autoZoom then
-      w.autoZoom = true; w.zoomOverlay = true
+      w.autoZoom = true; w.zoomOverlay = true; w.zoomOverlayTime = getTime()
       w.zoomSettling = false; w.pendingZoom = nil
       print("[OSMMap] manual zoom: re-engaged auto")
     end
@@ -319,6 +360,7 @@ local function handleManualZoom(w)
     w.zoomSettling   = true
     w.zoomSettleTime = getTime()
     w.zoomOverlay    = true
+    w.zoomOverlayTime = getTime()
     w.autoZoom       = false
     print("[OSMMap] manual zoom: pending "..mapped)
   end
@@ -384,26 +426,20 @@ local function drawTrail(w, tOX, tOY, cTx, cTy)
   local zoom = w.zoom
   local ox, oy, zw, zh = w.zone.x, w.zone.y, w.zone.w, w.zone.h
 
-  local function drawSeg(p1, p2, col)
-    local x1,y1 = toScreen(p1[1],p1[2], tOX,tOY,cTx,cTy,zoom)
-    local x2,y2 = toScreen(p2[1],p2[2], tOX,tOY,cTx,cTy,zoom)
-    setC(col)
-    if lcd.drawLineWithClipping then
-      lcd.drawLineWithClipping(x1,y1,x2,y2, ox,ox+zw-1, oy,oy+zh-1, SOLID, CUSTOM_COLOR)
-    else
-      lcd.drawLine(x1,y1,x2,y2, SOLID, CUSTOM_COLOR)
-    end
-  end
+  -- compute coordinate bounds once to skip offscreen points
+  local minTx = (ox - tOX) / TILE_SIZE + cTx
+  local maxTx = (ox + zw - tOX) / TILE_SIZE + cTx
+  local minTy = (oy - tOY) / TILE_SIZE + cTy
+  local maxTy = (oy + zh - tOY) / TILE_SIZE + cTy
 
-  -- coarse trail first (drawn under recent)
-  for i=2,#w.trailCoarse do drawSeg(w.trailCoarse[i-1], w.trailCoarse[i], C.trailC) end
-  -- recent trail on top
-  for i=2,#w.trailRecent do drawSeg(w.trailRecent[i-1], w.trailRecent[i], C.trailR) end
-  -- small dot at each recent point for visibility
   setC(C.trailR)
-  for _,p in ipairs(w.trailRecent) do
-    local px,py = toScreen(p[1],p[2], tOX,tOY,cTx,cTy,zoom)
-    lcd.drawFilledRectangle(px-2, py-2, 4, 4, CUSTOM_COLOR)
+  for _, p in ipairs(w.trail) do
+    local tx, ty = latLonToTileF(p[1], p[2], zoom)
+    if tx >= minTx and tx <= maxTx and ty >= minTy and ty <= maxTy then
+      local px = mfloor(tOX + (tx - cTx) * TILE_SIZE)
+      local py = mfloor(tOY + (ty - cTy) * TILE_SIZE)
+      lcd.drawFilledRectangle(px-2, py-2, 4, 4, CUSTOM_COLOR)
+    end
   end
 end
 
@@ -537,7 +573,7 @@ end
 
 local function background(w)
   -- poll telemetry even when not visible, maintain arm/disarm state
-  local la, lo = readGPS(w)
+  local la, lo, sats = readGPS(w)
   local armed = readArmed(w)
 
   -- arm/disarm edge detect
@@ -561,8 +597,9 @@ local function background(w)
 
   if la and lo then
     w.stalePos = false
-    -- push trail on every tick (coarse trail self-deduplicates)
-    pushTrail(w, la, lo)
+    if sats == nil or sats >= 3 then
+      pushTrail(w, la, lo)
+    end
     w.lat = la
     w.lon = lo
   else
@@ -583,19 +620,21 @@ local function refresh(w, event, touchState)
   -- manual zoom handling
   handleManualZoom(w)
 
-  -- nothing to show
+  if w.zoomOverlay and (getTime() - w.zoomOverlayTime) >= ZOOM_OVERLAY_TICKS then
+    w.zoomOverlay = false
+  end
+
   if not w.lat then
     drawNoGPS(w)
     return
   end
 
-  -- auto zoom
   if w.autoZoom and not w.zoomSettling then
     doAutoZoom(w)
   end
 
   local ox, oy = w.zone.x, w.zone.y
-  local zw, h = w.zone.w, w.zone.h
+  local zw, zh = w.zone.w, w.zone.h
   local cx = ox + mfloor(zw/2)
   local cy = oy + mfloor(zh/2)
 
