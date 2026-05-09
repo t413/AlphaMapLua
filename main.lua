@@ -377,6 +377,38 @@ local function handleManualZoom(w)
   end
 end
 
+local function handleWidgetEvents(w, event)
+  local minZ = w.options.MinZoom or 8
+  local maxZ = w.options.MaxZoom or 17
+
+  if event == EVT_ROT_RIGHT or event == EVT_ROT_LEFT then
+    local delta = event == EVT_ROT_RIGHT and 1 or -1
+    local nextZoom = clamp(w.zoom + delta, minZ, maxZ)
+    if nextZoom ~= w.zoom then
+      w.zoom = nextZoom
+      w.autoZoom = false
+      w.zoomSettling = false
+      w.pendingZoom = nil
+      w.zoomOverlay = true
+      w.zoomOverlayTime = getTime()
+      clearTileCache()
+      print(string.format("[OSMMap] wheel zoom -> %d", w.zoom))
+    end
+    return
+  end
+
+  if event == EVT_ENTER_BREAK then
+    if not w.autoZoom then
+      w.autoZoom = true
+      w.zoomOverlay = true
+      w.zoomOverlayTime = getTime()
+      w.zoomSettling = false
+      w.pendingZoom = nil
+      print("[OSMMap] widget full-screen reset to auto zoom")
+    end
+  end
+end
+
 -- ── drawing helpers ──────────────────────────────────────────────────────────
 local function setC(col) lcd.setColor(CUSTOM_COLOR, col) end
 
@@ -616,6 +648,9 @@ end
 
 local function refresh(w, event, touchState)
   background(w)
+  if event then
+    handleWidgetEvents(w, event)
+  end
 
   -- manual zoom handling
   handleManualZoom(w)
