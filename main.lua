@@ -1,5 +1,5 @@
 -- OSMMap Widget for EdgeTX
--- Single-file OSM tile map widget with auto-zoom, breadcrumbs, home marker
+-- Single-file OSM tile map widget breadcrumbs, home marker
 -- Place at /WIDGETS/OSMMap/main.lua
 -- Tiles go in /WIDGETS/OSMMap/tiles/Z/X/Y.png
 
@@ -18,12 +18,12 @@ local TRAIL_BAND_TOLERANCES = { 1, 10, 20, 50} --meters tollerance
 local ZOOM_OVERLAY_TICKS = 40
 
 local TRAIL_MAX_DECIMATE = 200 --ticks between decimations
-local AUTO_ZOOM_SETTLE = 500  -- ticks between auto-zooms
 
 -- widget options exposed to EdgeTX settings menu
 local options = {
   { "ZoomSrc",  SOURCE, 0 },   -- analog source for manual zoom (0 = none/auto)
   { "ArmCh",    SOURCE, 0 },   -- arm/disarm channel (ch5 default, set in menu)
+  { "DefZoom",  VALUE,  15, ZOOM_MIN, ZOOM_MAX },
   { "MaxZoom",  VALUE,  17, ZOOM_MIN, ZOOM_MAX },
   { "MinZoom",  VALUE,  8,  ZOOM_MIN, ZOOM_MAX },
 }
@@ -176,9 +176,7 @@ local function create(zone, opts)
     homeSet = false,
     armed = false,
     trail = {},                    -- {lat,lon} newest first, progressive decimation
-    zoom = opts.MaxZoom or 15,
-    autoZoom = true,
-    autoZoomDirty = true,
+    zoom = opts.DefZoom or 15,
     manualZoomLast = nil,
     zoomSettling = false,
     zoomSettleTime = 0,
@@ -186,7 +184,6 @@ local function create(zone, opts)
     zoomOverlayTime = 0,
     pendingZoom = nil,
     lastDecimate = 0,
-    lastAutoZoom = 0,
   }
   -- load saved position
   local sLa, sLo = loadLastPos()
@@ -286,51 +283,10 @@ local function pushTrail(w, lat, lon)
   end
 
   table.insert(w.trail, 1, {lat, lon})
-  w.autoZoomDirty = true --requests new calculation
   local now = getTime()
   if now - w.lastDecimate >= TRAIL_MAX_DECIMATE then
     w.lastDecimate = now
     decimateTrail(w)
-  end
-end
-
--- ── auto zoom ────────────────────────────────────────────────────────────────
-
-local function doAutoZoom(w)
-  if not w.autoZoom or not w.lat or not w.autoZoomDirty then return end
-  if #w.trail == 0 then return end
-  local now = getTime()
-  if now - w.lastAutoZoom < AUTO_ZOOM_SETTLE then return end
-  w.lastAutoZoom = now
-
-  local minZ = w.options.MinZoom or 8
-  local maxZ = w.options.MaxZoom or 17
-  local zw,zh = w.zone.w, w.zone.h
-
-  local cTx,cTy = latLonToTileF(w.lat, w.lon, w.zoom)
-  local mnX,mxX,mnY,mxY = 0,0,0,0
-  local function check(la,lo)
-    local tx,ty = latLonToTileF(la,lo,w.zoom)
-    local px = (tx-cTx)*TILE_SIZE;  local py = (ty-cTy)*TILE_SIZE
-    if px < mnX then mnX = px end; if px > mxX then mxX = px end
-    if py < mnY then mnY = py end; if py > mxY then mxY = py end
-  end
-  for _,p in ipairs(w.trail) do check(p[1],p[2]) end
-
-  local spanX = mxX-mnX;  local spanY = mxY-mnY
-
-  if (spanX > zw*0.80 or spanY > zh*0.80) and w.zoom > minZ then
-    w.zoom = w.zoom - 1
-    clearTileCache()
-    print(string.format("[OSMMap] autozoom OUT -> %d (span %d,%d)", w.zoom, mfloor(spanX), mfloor(spanY)))
-  elseif spanX < zw*0.20 and spanY < zh*0.20 and w.zoom < maxZ then
-    if hasTilesForZoom(w.lat, w.lon, w.zoom + 1) then
-      w.zoom = w.zoom + 1
-      clearTileCache()
-      print(string.format("[OSMMap] autozoom IN  -> %d (span %d,%d)", w.zoom, mfloor(spanX), mfloor(spanY)))
-    else
-      print(string.format("[OSMMap] autozoom blocked at %d because zoom %d has no tiles", w.zoom, w.zoom + 1))
-    end
   end
 end
 
@@ -346,16 +302,6 @@ local function handleManualZoom(w)
   local minZ = w.options.MinZoom or 8
   local maxZ = w.options.MaxZoom or 17
 
-  -- bottom ~5% of range -> re-engage auto
-  if v < -970 then
-    if not w.autoZoom then
-      w.autoZoom = true; w.zoomOverlay = true; w.zoomOverlayTime = getTime()
-      w.zoomSettling = false; w.pendingZoom = nil
-      print("[OSMMap] manual zoom: re-engaged auto")
-    end
-    return
-  end
-
   local mapped = mfloor(((v + 1024) / 2048) * (maxZ - minZ) + minZ + 0.5)
   mapped = clamp(mapped, minZ, maxZ)
 
@@ -366,7 +312,6 @@ local function handleManualZoom(w)
     w.zoomSettleTime = getTime()
     w.zoomOverlay    = true
     w.zoomOverlayTime = getTime()
-    w.autoZoom       = false
     print("[OSMMap] manual zoom: pending "..mapped)
   end
 
@@ -391,7 +336,6 @@ local function handleWidgetEvents(w, event)
     local nextZoom = clamp(w.zoom + delta, minZ, maxZ)
     if nextZoom ~= w.zoom then
       w.zoom = nextZoom
-      w.autoZoom = false
       w.zoomSettling = false
       w.pendingZoom = nil
       w.zoomOverlay = true
@@ -400,17 +344,6 @@ local function handleWidgetEvents(w, event)
       print(string.format("[OSMMap] wheel zoom -> %d", w.zoom))
     end
     return
-  end
-
-  if event == EVT_ENTER_BREAK then
-    if not w.autoZoom then
-      w.autoZoom = true
-      w.zoomOverlay = true
-      w.zoomOverlayTime = getTime()
-      w.zoomSettling = false
-      w.pendingZoom = nil
-      print("[OSMMap] widget full-screen reset to auto zoom")
-    end
   end
 end
 
@@ -559,8 +492,8 @@ local function drawStatusBar(w)
   local f  = SMLSIZE + CUSTOM_COLOR
   local yT = oy + 2
 
-  -- left: zoom level + auto/manual indicator + stale flag
-  local leftStr = string.format("Z:%d%s", w.zoom, w.autoZoom and " A" or " M")
+  -- left: zoom level
+  local leftStr = string.format("Z:%d", w.zoom)
   if w.stalePos then leftStr = leftStr.." STALE" end
   setC(w.stalePos and C.stale or C.white)
   lcd.drawText(ox+2, yT, leftStr, f)
@@ -583,8 +516,7 @@ end
 local function drawZoomOverlay(w)
   if not w.zoomOverlay then return end
   local ox,oy,zw,zh = w.zone.x, w.zone.y, w.zone.w, w.zone.h
-  local label = w.autoZoom and "AUTO"
-            or (w.pendingZoom and ("Zoom: "..w.pendingZoom) or ("Zoom: "..w.zoom))
+  local label = (w.pendingZoom and ("Zoom: "..w.pendingZoom) or ("Zoom: "..w.zoom))
   local sw,sh = lcd.sizeText(label, MIDSIZE)
   local bw = sw+20;  local bh = sh+12
   local bx = ox + mfloor((zw-bw)/2)
@@ -667,10 +599,6 @@ local function refresh(w, event, touchState)
   if not w.lat then
     drawNoGPS(w)
     return
-  end
-
-  if w.autoZoom and not w.zoomSettling then
-    doAutoZoom(w)
   end
 
   local ox, oy = w.zone.x, w.zone.y
