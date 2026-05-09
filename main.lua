@@ -11,13 +11,14 @@ local TILE_PATH = "/WIDGETS/OSMMap/tiles/"
 local SAVE_PATH = "/WIDGETS/OSMMap/last_"
 local PI = math.pi
 local RAD = PI / 180
+local MAX_USAGE = 50
 local TRAIL_MAX = 100
 local TRAIL_MIN_STEP = 1
 local TRAIL_BAND_THRESHOLDS = {10, 20, 50, TRAIL_MAX} --point index
 local TRAIL_BAND_TOLERANCES = { 1, 10, 20, 50} --meters tollerance
 local ZOOM_OVERLAY_TICKS = 40
+local TRAIL_MAX_DECIMATE = 500 --ticks between decimations
 
-local TRAIL_MAX_DECIMATE = 200 --ticks between decimations
 
 -- widget options exposed to EdgeTX settings menu
 local options = {
@@ -66,12 +67,11 @@ local function latLonToTileF(lat, lon, zoom)
   return tx, ty  -- fractional tile coords
 end
 
-local function haversine(la1, lo1, la2, lo2)
-  local R = 6371000
-  local dLa = (la2-la1)*RAD
-  local dLo = (lo2-lo1)*RAD
-  local a = math.sin(dLa/2)^2 + math.cos(la1*RAD)*math.cos(la2*RAD)*math.sin(dLo/2)^2
-  return 2*R*math.asin(math.sqrt(a))
+local function approxDist(lat1, lon1, lat2, lon2)
+  -- Rough Euclidean in meters (accurate for small deltas)
+  local dLat = (lat2 - lat1) * 111320  -- ~111km per degree lat
+  local dLon = (lon2 - lon1) * 111320 * math.cos((lat1 + lat2) / 2 * RAD)
+  return math.sqrt(dLat*dLat + dLon*dLon)
 end
 
 local function fmtDist(m)
@@ -262,7 +262,7 @@ local function decimateTrail(w)
     else
       local idx = #kept + 1
       local tol = trailTolerance(idx)
-      if haversine(pt[1], pt[2], last[1], last[2]) >= tol then
+      if approxDist(pt[1], pt[2], last[1], last[2]) >= tol then
         table.insert(kept, pt)
         last = pt
       end
@@ -276,7 +276,7 @@ end
 local function pushTrail(w, lat, lon)
   local last = w.trail[1]
   if last then
-    local delta = haversine(lat, lon, last[1], last[2])
+    local delta = approxDist(lat, lon, last[1], last[2])
     if delta < TRAIL_MIN_STEP then
       return
     end
@@ -504,7 +504,7 @@ local function drawStatusBar(w)
 
   -- right: home distance
   if w.homeSet and w.lat then
-    local dist = haversine(w.lat, w.lon, w.homeLat, w.homeLon)
+    local dist = approxDist(w.lat, w.lon, w.homeLat, w.homeLon)
     local distStr = "H "..fmtDist(dist)
     local sw,_  = lcd.sizeText(distStr, SMLSIZE)
     setC(C.home)
@@ -589,7 +589,6 @@ local function refresh(w, event, touchState)
     handleWidgetEvents(w, event)
   end
 
-  -- manual zoom handling
   handleManualZoom(w)
 
   if w.zoomOverlay and (getTime() - w.zoomOverlayTime) >= ZOOM_OVERLAY_TICKS then
@@ -613,7 +612,8 @@ local function refresh(w, event, touchState)
   local tOX,tOY,cTx,cTy = drawTiles(w, cx, cy)
 
   -- overlays
-  drawTrail(w, tOX, tOY, cTx, cTy)
+  if getUsage() < MAX_USAGE then drawTrail(w, tOX, tOY, cTx, cTy)
+  else print(string.format("[OSMMap] skip drawTrail, high CPU %d%%", getUsage())) end
   drawHomeMarker(w, tOX, tOY, cTx, cTy)
   drawCraft(w, cx, cy)
   drawStatusBar(w)
