@@ -32,7 +32,7 @@ Designed for FPV pilots, fixed wing, and long-range flying where having an onboa
 
 ## 1. Download
 - Either download the [latest version from GitHub](https://github.com/t413/AlphaMapLua/archive/refs/heads/master.zip)
-  * then copy the `AlphaMap` folder to your SD card under `/WIDGETS/`
+  * then copy the `AlphaMapLua` folder to your SD card under `/WIDGETS/`
 - Or clone the repository directly into place on your SD Card:
 
 ```bash
@@ -47,7 +47,7 @@ Use my python tool [osm2edgetx](https://github.com/t413/osm2edgetx) from the com
 Download the [lastest version](https://github.com/t413/osm2edgetx/archive/refs/heads/master.zip) and run something like:
 
 ```bash
-cd /Volumes/SD_CARD_PATH/WIDGETS/AlphaMap/
+cd /Volumes/SD_CARD_PATH/WIDGETS/AlphaMapLua/
 python osm2edgetx.py --osm ./tiles --fetch "37.87,-122.32" --radius 5 --zoom 17
 ```
 
