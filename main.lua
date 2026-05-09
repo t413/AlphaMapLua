@@ -28,7 +28,7 @@ local options = {
   { "DefZoom",  VALUE,  15, ZOOM_MIN, ZOOM_MAX },
   { "MaxZoom",  VALUE,  17, ZOOM_MIN, ZOOM_MAX },
   { "MinZoom",  VALUE,  5,  ZOOM_MIN, ZOOM_MAX },
-  { "DisarmQR", BOOL,   1 },   -- Show QR code on disarm if far from home
+  { "DisarmQR", VALUE,  100, 0, 250 }, -- QR size on disarm (0 to disable)
   { "HomeOnce", BOOL,   0 },   -- Only set home on the very first arming
 }
 
@@ -528,7 +528,7 @@ end
 -- ── QR overlay ───────────────────────────────────────────────────────────────
 local function drawQrOverlay(w)
   if not w.showQRtxt or not lvgl or not lvgl.qrcode then return end
-  if w.armed or not w.options.DisarmQR == 0 then
+  if w.armed or w.options.DisarmQR == 0 then
     lvgl.clear()
     w.showQRtxt = nil
     return
@@ -537,7 +537,7 @@ local function drawQrOverlay(w)
   if newtxt ~= w.showQRtxt then
     print("[AlphaMap] updating QR txt: "..newtxt)
     w.showQRtxt = newtxt
-    local qrSize = 100
+    local qrSize = w.options.DisarmQR
     lvgl.clear()
     w.showQRobj = lvgl.qrcode({
       x = w.zone.x + 5,
@@ -569,7 +569,7 @@ local function background(w)
   -- disarm falling edge -> persist last position
   if (not armed) and w.armed then
     if la and lo then saveLastPos(la, lo) end
-    if w.options.DisarmQR == 1 and w.homeSet and la and lo then
+    if w.options.DisarmQR > 0 and w.homeSet and la and lo then
       if approxDist(la, lo, w.homeLat, w.homeLon) > QR_DISARM_MIN_DIST then
         w.showQRtxt = " " --placeholder to start qr render
       end
