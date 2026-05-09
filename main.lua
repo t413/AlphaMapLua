@@ -29,6 +29,7 @@ local options = {
   { "MaxZoom",  VALUE,  17, ZOOM_MIN, ZOOM_MAX },
   { "MinZoom",  VALUE,  5,  ZOOM_MIN, ZOOM_MAX },
   { "DisarmQR", BOOL,   1 },   -- Show QR code on disarm if far from home
+  { "HomeOnce", BOOL,   0 },   -- Only set home on the very first arming
 }
 
 -- ── math helpers ────────────────────────────────────────────────────────────
@@ -557,9 +558,11 @@ local function background(w)
   if armed and not w.armed then
     -- just armed: save home
     if la and lo then
-      w.homeLat = la
-      w.homeLon = lo
-      w.homeSet = true
+      if w.options.HomeOnce == 0 or not w.homeSet then
+        w.homeLat = la
+        w.homeLon = lo
+        w.homeSet = true
+      end
     else
     end
   end
