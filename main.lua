@@ -1,14 +1,14 @@
--- OSMMap Widget for EdgeTX
+-- AlphaMap Widget for EdgeTX
 -- Single-file OSM tile map widget breadcrumbs, home marker
--- Place at /WIDGETS/OSMMap/main.lua
--- Tiles go in /WIDGETS/OSMMap/tiles/Z/X/Y.png
+-- Place at /WIDGETS/AlphaMap/main.lua
+-- Tiles go in /WIDGETS/AlphaMap/tiles/Z/X/Y.png
 
-local W_NAME = "OSMMap"
+local W_NAME = "AlphaMap"
 local TILE_SIZE = 256
 local ZOOM_MIN = 2
 local ZOOM_MAX = 19
-local TILE_PATH = "/WIDGETS/OSMMap/tiles/"
-local SAVE_PATH = "/WIDGETS/OSMMap/last_"
+local TILE_PATH = "/WIDGETS/AlphaMap/tiles/"
+local SAVE_PATH = "/WIDGETS/AlphaMap/last_"
 local PI = math.pi
 local RAD = PI / 180
 local MAX_USAGE = 50
@@ -138,7 +138,7 @@ local function saveLastPos(lat, lon)
     io.write(f, string.format("%.7f,%.7f\n", lat, lon))
     io.close(f)
   end
-  print("[OSMMap] saved last pos "..lat..","..lon)
+  print("[AlphaMap] saved last pos "..lat..","..lon)
 end
 
 local function loadLastPos()
@@ -194,7 +194,7 @@ local function create(zone, opts)
       w.zoom = z
       if hasTilesForZoom(w.lat, w.lon, z) then break end
     end
-    print("[OSMMap] create: stale pos "..sLa..","..sLo)
+    print("[AlphaMap] create: stale pos "..sLa..","..sLo)
   end
   return w
 end
@@ -202,7 +202,6 @@ end
 -- ── update ───────────────────────────────────────────────────────────────────
 local function update(w, opts)
   w.options = opts
-  print("[OSMMap] options updated: MaxZoom="..opts.MaxZoom.." MinZoom="..opts.MinZoom)
 end
 
 -- ── telemetry ────────────────────────────────────────────────────────────────
@@ -270,7 +269,6 @@ local function decimateTrail(w)
     if #kept >= TRAIL_MAX then break end
   end
   w.trail = kept
-  print(string.format("[OSMMap] trail decimate from %d to %d", #old, #kept))
 end
 
 local function pushTrail(w, lat, lon)
@@ -312,7 +310,6 @@ local function handleManualZoom(w)
     w.zoomSettleTime = getTime()
     w.zoomOverlay    = true
     w.zoomOverlayTime = getTime()
-    print("[OSMMap] manual zoom: pending "..mapped)
   end
 
   if w.zoomSettling and w.pendingZoom then
@@ -320,7 +317,6 @@ local function handleManualZoom(w)
       if w.zoom ~= w.pendingZoom then
         w.zoom = w.pendingZoom
         clearTileCache()
-        print("[OSMMap] manual zoom: applied "..w.zoom)
       end
       w.zoomSettling = false; w.zoomOverlay = false; w.pendingZoom = nil
     end
@@ -341,7 +337,6 @@ local function handleWidgetEvents(w, event)
       w.zoomOverlay = true
       w.zoomOverlayTime = getTime()
       clearTileCache()
-      print(string.format("[OSMMap] wheel zoom -> %d", w.zoom))
     end
     return
   end
@@ -552,15 +547,12 @@ local function background(w)
       w.homeLat = la
       w.homeLon = lo
       w.homeSet = true
-      print(string.format("[OSMMap] ARMED -> home %.6f,%.6f", la, lo))
     else
-      print("[OSMMap] ARMED but no GPS lock for home")
     end
   end
   -- disarm falling edge -> persist last position
   if (not armed) and w.armed then
     if la and lo then saveLastPos(la, lo) end
-    print("[OSMMap] DISARMED")
   end
   w.armed = armed
 
@@ -576,7 +568,6 @@ local function background(w)
     if w.lat and not w.stalePos then
       saveLastPos(w.lat, w.lon)
       w.stalePos = true
-      print("[OSMMap] telem lost -> stale, saved last pos")
     end
   end
 end
@@ -613,7 +604,7 @@ local function refresh(w, event, touchState)
 
   -- overlays
   if getUsage() < MAX_USAGE then drawTrail(w, tOX, tOY, cTx, cTy)
-  else print(string.format("[OSMMap] skip drawTrail, high CPU %d%%", getUsage())) end
+  else print(string.format("[AlphaMap] skip drawTrail, high CPU %d%%", getUsage())) end
   drawHomeMarker(w, tOX, tOY, cTx, cTy)
   drawCraft(w, cx, cy)
   drawStatusBar(w)
