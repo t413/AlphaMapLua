@@ -108,6 +108,13 @@ local function getTile(z, x, y)
   return nil
 end
 
+local function hasTilesForZoom(lat, lon, zoom)
+  if not lat then return false end
+  local tx,ty = latLonToTileF(lat, lon, zoom)
+  local cTx,cTy = mfloor(tx), mfloor(ty)
+  return getTile(zoom, cTx, cTy) ~= nil
+end
+
 local function clearTileCache()
   tileCache = {}; tileCacheOrder = {}
   collectgarbage(); collectgarbage()
@@ -181,6 +188,11 @@ local function create(zone, opts)
   local sLa, sLo = loadLastPos()
   if sLa then
     w.lat = sLa; w.lon = sLo; w.stalePos = true
+    -- find initial zoom level that has tiles available
+    for z = w.zoom, (w.options.MinZoom or 8), -1 do
+      w.zoom = z
+      if hasTilesForZoom(w.lat, w.lon, z) then break end
+    end
     print("[OSMMap] create: stale pos "..sLa..","..sLo)
   end
   return w
@@ -284,12 +296,6 @@ end
 local autoZoomLastTick = 0
 local AUTO_ZOOM_SETTLE = 500  -- ticks between auto-zooms
 
-local function canZoomIn(w, zoom)
-  if not w.lat then return false end
-  local tx,ty = latLonToTileF(w.lat, w.lon, zoom)
-  local cTx,cTy = mfloor(tx), mfloor(ty)
-  return getTile(zoom, cTx, cTy) ~= nil
-end
 
 local function doAutoZoom(w)
   if not w.autoZoom or not w.lat or not w.autoZoomDirty then return end
@@ -319,7 +325,7 @@ local function doAutoZoom(w)
     clearTileCache()
     print(string.format("[OSMMap] autozoom OUT -> %d (span %d,%d)", w.zoom, mfloor(spanX), mfloor(spanY)))
   elseif spanX < zw*0.20 and spanY < zh*0.20 and w.zoom < maxZ then
-    if canZoomIn(w, w.zoom + 1) then
+    if hasTilesForZoom(w.lat, w.lon, w.zoom + 1) then
       w.zoom = w.zoom + 1
       clearTileCache()
       print(string.format("[OSMMap] autozoom IN  -> %d (span %d,%d)", w.zoom, mfloor(spanX), mfloor(spanY)))
