@@ -19,7 +19,7 @@ local TRAIL_BAND_THRESHOLDS = {10, 20, 50, TRAIL_MAX} --point index
 local TRAIL_BAND_TOLERANCES = { 1, 10, 20, 50} --meters tollerance
 local ZOOM_OVERLAY_TICKS = 40
 local TRAIL_MAX_DECIMATE = 500 --ticks between decimations
-
+local QR_DISARM_MIN_DIST = 10 --meters
 
 -- widget options exposed to EdgeTX settings menu
 local options = {
@@ -28,6 +28,7 @@ local options = {
   { "DefZoom",  VALUE,  15, ZOOM_MIN, ZOOM_MAX },
   { "MaxZoom",  VALUE,  17, ZOOM_MIN, ZOOM_MAX },
   { "MinZoom",  VALUE,  5,  ZOOM_MIN, ZOOM_MAX },
+  { "DisarmQR", BOOL,   1 },   -- Show QR code on disarm if far from home
 }
 
 -- ── math helpers ────────────────────────────────────────────────────────────
@@ -183,6 +184,7 @@ local function create(zone, opts)
     zoomOverlay = false,
     zoomOverlayTime = 0,
     pendingZoom = nil,
+    showQRtxt = nil,
     lastDecimate = 0,
   }
   -- load saved position
@@ -522,6 +524,28 @@ local function drawZoomOverlay(w)
   lcd.drawText(ox+zw/2, by+6, label, MIDSIZE+CENTER+CUSTOM_COLOR)
 end
 
+-- ── QR overlay ───────────────────────────────────────────────────────────────
+local function drawQrOverlay(w)
+  if not w.showQRtxt or not lvgl or not lvgl.qrcode then return end
+  if w.armed or not w.options.DisarmQR == 0 then
+    lvgl.clear()
+    w.showQRtxt = nil
+    return
+  end
+  local newtxt = string.format("geo:%.6f,%.6f", w.lat, w.lon)
+  if newtxt ~= w.showQRtxt then
+    print("[AlphaMap] updating QR txt: "..newtxt)
+    w.showQRtxt = newtxt
+    local qrSize = 100
+    lvgl.clear()
+    w.showQRobj = lvgl.qrcode({
+      x = w.zone.x + 5,
+      y = w.zone.y + w.zone.h - qrSize - 5,
+      w = qrSize, h = qrSize, data = newtxt
+    })
+  end
+end
+
 -- ── background ───────────────────────────────────────────────────────────────
 
 local function background(w)
@@ -542,6 +566,11 @@ local function background(w)
   -- disarm falling edge -> persist last position
   if (not armed) and w.armed then
     if la and lo then saveLastPos(la, lo) end
+    if w.options.DisarmQR == 1 and w.homeSet and la and lo then
+      if approxDist(la, lo, w.homeLat, w.homeLon) > QR_DISARM_MIN_DIST then
+        w.showQRtxt = " " --placeholder to start qr render
+      end
+    end
   end
   w.armed = armed
 
@@ -602,6 +631,7 @@ local function refresh(w, event, touchState)
   drawCraft(w, cx, cy)
   drawStatusBar(w)
   drawZoomOverlay(w)
+  drawQrOverlay(w)
 end
 
 -- ── return interface ──────────────────────────────────────────────────────────
