@@ -27,7 +27,7 @@ local options = {
   { "ArmCh",    SOURCE, 0 },   -- arm/disarm channel (ch5 default, set in menu)
   { "DefZoom",  VALUE,  15, ZOOM_MIN, ZOOM_MAX },
   { "MaxZoom",  VALUE,  17, ZOOM_MIN, ZOOM_MAX },
-  { "MinZoom",  VALUE,  8,  ZOOM_MIN, ZOOM_MAX },
+  { "MinZoom",  VALUE,  5,  ZOOM_MIN, ZOOM_MAX },
 }
 
 -- ── math helpers ────────────────────────────────────────────────────────────
@@ -142,8 +142,7 @@ local function saveLastPos(lat, lon)
   print("[AlphaMap] saved last pos "..lat..","..lon)
 end
 
-local function loadLastPos()
-  local path = SAVE_PATH..modelSlug()..".txt"
+local function loadLastPos(path)
   local f = io.open(path, "r")
   if f then
     local line = io.read(f, 64)
@@ -187,7 +186,7 @@ local function create(zone, opts)
     lastDecimate = 0,
   }
   -- load saved position
-  local sLa, sLo = loadLastPos()
+  local sLa, sLo = loadLastPos(SAVE_PATH..modelSlug()..".txt")
   if sLa then
     w.lat = sLa; w.lon = sLo; w.stalePos = true
     -- find initial zoom level that has tiles available
@@ -348,13 +347,12 @@ local function setC(col) lcd.setColor(CUSTOM_COLOR, col) end
 
 -- ── draw tiles ───────────────────────────────────────────────────────────────
 -- Returns tOX, tOY (pixel top-left of tile [cTx,cTy]), cTx, cTy
-local function drawTiles(w, cx, cy)
-  local zoom = w.zoom
-  local tx,ty = latLonToTileF(w.lat, w.lon, zoom)
+local function drawTiles(zoom, lat, lon, zone, cx, cy)
+  local tx,ty = latLonToTileF(lat, lon, zoom)
   local cTx = mfloor(tx);  local cTy = mfloor(ty)
   local tOX = cx - mfloor((tx-cTx) * TILE_SIZE)
   local tOY = cy - mfloor((ty-cTy) * TILE_SIZE)
-  local ox,oy,zw,zh = w.zone.x, w.zone.y, w.zone.w, w.zone.h
+  local ox,oy,zw,zh = zone.x, zone.y, zone.w, zone.h
   local tilesH = math.ceil(zw/TILE_SIZE/2)+1
   local tilesV = math.ceil(zh/TILE_SIZE/2)+1
 
@@ -501,7 +499,7 @@ local function drawStatusBar(w)
   -- right: home distance
   if w.homeSet and w.lat then
     local dist = approxDist(w.lat, w.lon, w.homeLat, w.homeLon)
-    local distStr = "H "..fmtDist(dist)
+    local distStr = fmtDist(dist)
     local sw,_  = lcd.sizeText(distStr, SMLSIZE)
     setC(C.home)
     lcd.drawText(ox+zw-sw-2, yT, distStr, f)
@@ -522,16 +520,6 @@ local function drawZoomOverlay(w)
   setC(C.white)
   lcd.drawRectangle(bx, by, bw, bh, CUSTOM_COLOR)
   lcd.drawText(ox+zw/2, by+6, label, MIDSIZE+CENTER+CUSTOM_COLOR)
-end
-
--- ── no-GPS screen ────────────────────────────────────────────────────────────
-local function drawNoGPS(w)
-  local ox,oy,zw,zh = w.zone.x, w.zone.y, w.zone.w, w.zone.h
-  setC(C.bg)
-  lcd.drawFilledRectangle(ox,oy,zw,zh,CUSTOM_COLOR)
-  setC(C.white)
-  lcd.drawText(ox+zw/2, oy+zh/2-10, "Waiting for GPS", MIDSIZE+CENTER+CUSTOM_COLOR)
-  lcd.drawText(ox+zw/2, oy+zh/2+8,  "Z:"..w.zoom, SMLSIZE+CENTER+CUSTOM_COLOR)
 end
 
 -- ── background ───────────────────────────────────────────────────────────────
@@ -587,11 +575,6 @@ local function refresh(w, event, touchState)
     w.zoomOverlay = false
   end
 
-  if not w.lat then
-    drawNoGPS(w)
-    return
-  end
-
   local ox, oy = w.zone.x, w.zone.y
   local zw, zh = w.zone.w, w.zone.h
   local cx = ox + mfloor(zw/2)
@@ -599,9 +582,18 @@ local function refresh(w, event, touchState)
 
   setC(C.bg)
   lcd.drawFilledRectangle(ox, oy, zw, zh, CUSTOM_COLOR)
+  local lat,lon,zoom = w.lat, w.lon, w.zoom
 
   -- tiles
-  local tOX,tOY,cTx,cTy = drawTiles(w, cx, cy)
+  local iswaiting = (not w.lat)
+  if iswaiting then zoom, lat, lon = 2, 0, 0 end --initial no telem position
+  local tOX,tOY,cTx,cTy = drawTiles(zoom, lat, lon, w.zone, cx, cy)
+  if iswaiting then
+    setC(C.bg)
+    lcd.drawText(ox + zw / 2, oy + zh / 2 - getBarH(), "AlphaMap by t413", SMLSIZE + CENTER + CUSTOM_COLOR)
+    lcd.drawText(ox + zw / 2, oy + zh / 2 - 10, "Waiting for GPS", MIDSIZE + CENTER + CUSTOM_COLOR)
+    return --skip drawing everything else
+  end
 
   -- overlays
   if getUsage() < MAX_USAGE then drawTrail(w, tOX, tOY, cTx, cTy)
