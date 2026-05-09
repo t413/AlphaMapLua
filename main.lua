@@ -17,6 +17,9 @@ local TRAIL_BAND_THRESHOLDS = {10, 20, 50, TRAIL_MAX} --point index
 local TRAIL_BAND_TOLERANCES = { 1, 10, 20, 50} --meters tollerance
 local ZOOM_OVERLAY_TICKS = 40
 
+local TRAIL_MAX_DECIMATE = 200 --ticks between decimations
+local AUTO_ZOOM_SETTLE = 500  -- ticks between auto-zooms
+
 -- widget options exposed to EdgeTX settings menu
 local options = {
   { "ZoomSrc",  SOURCE, 0 },   -- analog source for manual zoom (0 = none/auto)
@@ -183,6 +186,7 @@ local function create(zone, opts)
     zoomOverlayTime = 0,
     pendingZoom = nil,
     lastDecimate = 0,
+    lastAutoZoom = 0,
   }
   -- load saved position
   local sLa, sLo = loadLastPos()
@@ -242,8 +246,6 @@ end
 
 -- ── trail management ─────────────────────────────────────────────────────────
 
-local TRAIL_MAX_DECIMATE = 200 --ticks between decimations
-
 local function trailTolerance(index)
   if index <= TRAIL_BAND_THRESHOLDS[1] then return TRAIL_BAND_TOLERANCES[1] end
   if index <= TRAIL_BAND_THRESHOLDS[2] then return TRAIL_BAND_TOLERANCES[2] end
@@ -293,16 +295,13 @@ local function pushTrail(w, lat, lon)
 end
 
 -- ── auto zoom ────────────────────────────────────────────────────────────────
-local autoZoomLastTick = 0
-local AUTO_ZOOM_SETTLE = 500  -- ticks between auto-zooms
-
 
 local function doAutoZoom(w)
   if not w.autoZoom or not w.lat or not w.autoZoomDirty then return end
   if #w.trail == 0 then return end
   local now = getTime()
-  if now - autoZoomLastTick < AUTO_ZOOM_SETTLE then return end
-  autoZoomLastTick = now
+  if now - w.lastAutoZoom < AUTO_ZOOM_SETTLE then return end
+  w.lastAutoZoom = now
 
   local minZ = w.options.MinZoom or 8
   local maxZ = w.options.MaxZoom or 17
