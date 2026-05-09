@@ -4,22 +4,25 @@
 
 [![EdgeTX](https://img.shields.io/badge/EdgeTX-Compatible-blue?style=flat-square)](https://edgetx.org/)
 [![Lua](https://img.shields.io/badge/Lua-Widget-orange?style=flat-square)](https://www.lua.org/)
+[![License](https://img.shields.io/badge/License-GPL--3.0-green?style=flat-square)](https://github.com/t413/AlphaMapLua/blob/master/LICENSE)
 
 [<img src="https://t413.com/p/projects/osm2edgetx/AlphaMap_demo.gif" width="400" alt="osm2edgetx in action">](https://t413.com/p/projects/osm2edgetx/AlphaMap_demo.webp)
 
-AlphaMap is a fast, self-contained OpenStreetMap viewer widget for EdgeTX radios. It's like having google maps directly on your transmitter, centered on your aircraft’s live GPS position, with breadcrumbs, home marker tracking, zoom control, and persistent last-known position storage.
+AlphaMap is a fast, self-contained OpenStreetMap viewer widget for EdgeTX radios. It's like having google maps directly on your transmitter, centered on your aircraft’s live GPS position, with breadcrumbs, home marker tracking, zoom control, persistent last-known position storage, and now QR Code display on disarm.
 
 Designed for FPV pilots, fixed wing, and long-range flying where having an onboard moving map directly on your radio is genuinely useful.
 
+→ Head to [Releases](https://github.com/t413/AlphaMapLua/releases) to also download some base tiles to get started quickly! ←
 
 ## Features
 
-- **Offline OpenStreetMap tiles**
+- **Offline OpenStreetMap tiles**- download with my [osm2edgetx](https://github.com/t413/osm2edgetx) tool or any OSM tile downloader.
 - **Single-file widget** — simple install and minimal memory usage
 - **Breadcrumb trail/history**
   * Distance-based point filtering with progressive decimation with past points
 - **Automatic home marker** on arm (configurable arm channel)
 - **Distance-to-home display** with offscreen home direction arrow
+- **QR Code** shows when disarmed >10m away, scan with your phone to help navigate out to your downed craft
 - **Persistent last known position** saved to SD card across reboots
 - **Manual zoom control** assign a channel or use the scroll wheel in full screen widget mode
   * Scroll wheel for super quick zooming
@@ -56,13 +59,26 @@ Changing the coordinates, radius, and zoom level as needed.
 
 ## 3. Add the Widget in EdgeTX
 
+<a href="https://t413.com/p/projects/osm2edgetx/alphamap-screenshot.png">
+  <img src="https://t413.com/p/projects/osm2edgetx/alphamap-screenshot.png" align="right" alt="AlphaMap Screenshot" style="margin-left:10px; max-width:220px; border-radius:8px;">
+</a>
+
 On your radio:
 
 1. Open a screen
 2. Add a widget
 3. Select `AlphaMap`
 
+## 4. Advanced Usage
 
+- On the home screen hold down on the select wheel to allow selecting of the widget
+- Select the widget, it opens a menu. Choose either
+  * **Full screen**- when in full screen use the scroll wheel to zoom in and out without assigning a zoom channel
+  * **Widget settings**- set the zoom levels, arm/zoom channels, QR code, and other options
+- **DisarmQR** setting: set to a pixel size (recommend >60) and if you disarm further away than 10m it will make a maps QR that you phone can open to help navigate to your downed craft.
+- **HomeOnce** setting: Only sets what this widget things as a homepoint on the first arming
+
+<br clear="both">
 
 # Related Projects
 
