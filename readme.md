@@ -6,17 +6,22 @@
 [![Lua](https://img.shields.io/badge/Lua-Widget-orange?style=flat-square)](https://www.lua.org/)
 [![License](https://img.shields.io/badge/License-GPL--3.0-green?style=flat-square)](https://github.com/t413/AlphaMapLua/blob/master/LICENSE)
 
-[<img src="https://t413.com/p/projects/osm2edgetx/AlphaMap_demo.gif" width="400" alt="osm2edgetx in action">](https://t413.com/p/projects/osm2edgetx/AlphaMap_demo.webp)
+<p align="center">
+  <a href="https://t413.com/go/alphamaptool?ref=gh"><img src="https://t413.com/p/projects/osm2edgetx/AlphaMap_demo.gif" width="400" alt="osm2edgetx in action"></a>
+</p>
 
 AlphaMap is a fast, self-contained OpenStreetMap viewer widget for EdgeTX radios. It's like having google maps directly on your transmitter, centered on your aircraft’s live GPS position, with breadcrumbs, home marker tracking, zoom control, persistent last-known position storage, and now QR Code display on disarm.
 
 Designed for FPV pilots, fixed wing, and long-range flying where having an onboard moving map directly on your radio is genuinely useful.
 
-→ Head to [Releases](https://github.com/t413/AlphaMapLua/releases) to also download some base tiles to get started quickly! ←
+→ **New:** Use the [AlphaMap Web Installer & Map Downloader](ps://t413.com/go/alphamaptool?ref=gh) to easily install the script and download map tiles for entire regions! ←
+
+[![web tool screenshot](https://t413.com/p/projects/AlphaMapLua/web-tool.jpeg)](https://t413.com/go/alphamaptool?ref=gh)
+
 
 ## Features
 
-- **Offline OpenStreetMap tiles**- download with my [osm2edgetx](https://github.com/t413/osm2edgetx) tool or any OSM tile downloader.
+- **Offline OpenStreetMap tiles**- download via the [Web App](ps://t413.com/go/alphamaptool?ref=gh) or my osm2edgetx tool (see below), or any OSM tile downloader.
 - **Single-file widget** — simple install and minimal memory usage
 - **Breadcrumb trail/history**
   * Distance-based point filtering with progressive decimation with past points
@@ -33,29 +38,33 @@ Designed for FPV pilots, fixed wing, and long-range flying where having an onboa
 
 # Installation
 
-## 1. Download
-- Either download the [latest version from GitHub](https://github.com/t413/AlphaMapLua/archive/refs/heads/master.zip)
-  * then copy the `AlphaMapLua` folder to your SD card under `/WIDGETS/`
-- Or clone the repository directly into place on your SD Card:
+## 1. Web Install & Map Downloader (Recommended)
+The easiest way to install AlphaMap and download map tiles is using the web-based installer:
 
-```bash
-cd /Volumes/SD_CARD_PATH/WIDGETS/
-git clone https://github.com/t413/AlphaMapLua.git
-```
+**[👉 Launch AlphaMap Web Installer & Map Downloader](ps://t413.com/go/alphamaptool?ref=gh)**
 
-## 2. Download map tiles
+This tool allows you to update the Lua script and fetch map tiles for entire continents or specific regions directly to your SD card.
 
-Use my python tool [osm2edgetx](https://github.com/t413/osm2edgetx) from the command line to download tiles from OpenStreetMap. This project uses unmodified 256x256 OSM tiles, [documentation here](https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames).
+## 2. Manual Install Method
+1. **Download**
+  * Either download the [latest version from GitHub](https://github.com/t413/AlphaMapLua/archive/refs/heads/master.zip)
+    * then copy the `AlphaMapLua` folder to your SD card under `/WIDGETS/`
+  * Or clone the repository directly into place on your SD Card:
+    ```bash
+    cd /Volumes/SD_CARD_PATH/WIDGETS/
+    git clone https://github.com/t413/AlphaMapLua.git
+    ```
+2. **Download Map Tiles**
+  - Use my python tool [osm2edgetx](https://github.com/t413/osm2edgetx) from the command line to download tiles from OpenStreetMap. This project uses unmodified 256x256 OSM tiles, [documentation here](https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames).
 
-Download the [lastest version](https://github.com/t413/osm2edgetx/archive/refs/heads/master.zip) and run something like:
+    * Download the [lastest version](https://github.com/t413/osm2edgetx/archive/refs/heads/master.zip) and run something like:
 
-```bash
-cd /Volumes/SD_CARD_PATH/WIDGETS/AlphaMapLua/
-python osm2edgetx.py --osm ./tiles --fetch "37.87,-122.32" --radius 5 --zoom 17
-```
-
-Changing the coordinates, radius, and zoom level as needed.
-- Tip: right click anywhere on [google maps](https://maps.google.com) and click the first item, the coordinates, to copy to your clipboard and paste into the `--fetch` argument.
+      ```bash
+      cd /Volumes/SD_CARD_PATH/WIDGETS/AlphaMapLua/
+      python osm2edgetx.py --osm ./tiles --fetch "37.87,-122.32" --radius 5 --zoom 17
+      ```
+    - Changing the coordinates, radius, and zoom level as needed.
+    - Tip: right click anywhere on [google maps](https://maps.google.com) and click the first item, the coordinates, to copy to your clipboard and paste into the `--fetch` argument.
 
 ## 3. Add the Widget in EdgeTX
 
