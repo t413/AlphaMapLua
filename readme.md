@@ -14,14 +14,14 @@ AlphaMap is a fast, self-contained OpenStreetMap viewer widget for EdgeTX radios
 
 Designed for FPV pilots, fixed wing, and long-range flying where having an onboard moving map directly on your radio is genuinely useful.
 
-→ **New:** Use the [AlphaMap Web Installer & Map Downloader](ps://t413.com/go/alphamaptool?ref=gh) to easily install the script and download map tiles for entire regions! ←
+→ **New:** Use the [AlphaMap Web Installer & Map Downloader](https://t413.com/go/alphamaptool?ref=gh) to easily install the script and download map tiles for entire regions! ←
 
 [![web tool screenshot](https://t413.com/p/projects/AlphaMapLua/web-tool.jpeg)](https://t413.com/go/alphamaptool?ref=gh)
 
 
 ## Features
 
-- **Offline OpenStreetMap tiles**- download via the [Web App](ps://t413.com/go/alphamaptool?ref=gh) or my osm2edgetx tool (see below), or any OSM tile downloader.
+- **Offline OpenStreetMap tiles**- download via the [Web App](https://t413.com/go/alphamaptool?ref=gh) or my osm2edgetx tool (see below), or any OSM tile downloader.
 - **Single-file widget** — simple install and minimal memory usage
 - **Breadcrumb trail/history**
   * Distance-based point filtering with progressive decimation with past points
@@ -41,7 +41,7 @@ Designed for FPV pilots, fixed wing, and long-range flying where having an onboa
 ## 1. Web Install & Map Downloader (Recommended)
 The easiest way to install AlphaMap and download map tiles is using the web-based installer:
 
-**[👉 Launch AlphaMap Web Installer & Map Downloader](ps://t413.com/go/alphamaptool?ref=gh)**
+**[👉 Launch AlphaMap Web Installer & Map Downloader](https://t413.com/go/alphamaptool?ref=gh)**
 
 This tool allows you to update the Lua script and fetch map tiles for entire continents or specific regions directly to your SD card.
 
